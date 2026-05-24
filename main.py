@@ -21,6 +21,7 @@ CANON_SET = set(CANON)
 
 # Load environment variables in a file called .env
 load_dotenv(override=True)
+# FIXED: Load API key from environment variable, not hardcoded
 api_key = os.getenv("OPENAI_API_KEY")
 
 
@@ -126,7 +127,7 @@ Rules:
 Output format:
 1) 1–2 line summary
 2) Bullets with key observations
-3) If needed: a short “Data limitations” note
+3) If needed: a short "Data limitations" note
 """.strip()
 
     df_text = combined_df.to_string(index=False)
@@ -140,7 +141,7 @@ Output format:
 def summarize(combined_df: pd.DataFrame, user_question: str) -> str:
     client = OpenAI(api_key=api_key)
     response = client.chat.completions.create(
-        model="gpt-4.1-mini",
+        model="gpt-4o-mini",  # FIXED: Correct model name
         messages=messages_for(combined_df, user_question),
     )
     return response.choices[0].message.content
@@ -149,11 +150,15 @@ def summarize(combined_df: pd.DataFrame, user_question: str) -> str:
 # ---------------- Streamlit UI ----------------
 
 st.set_page_config(page_title="PSX Analyzer", layout="wide")
-st.title("PSX Market Summary — Live Scrape + OpenAI Answer")
+st.title("📈 PSX Market Summary — Live Scrape + AI Answer")
 
 if not api_key:
     st.error("OPENAI_API_KEY not found. Put it in .env or set it in your environment.")
     st.stop()
+
+# FIXED: Initialize session state to persist data
+if 'combined_df' not in st.session_state:
+    st.session_state.combined_df = None
 
 user_question = st.text_input(
     "Ask a question (example: 'tell the high and low volume stocks in psx')",
@@ -167,7 +172,7 @@ with col1:
     wait_time = st.slider("Wait time (seconds)", min_value=3, max_value=30, value=15)
 
 with col2:
-    if st.button("Run (Scrape + Ask OpenAI)"):
+    if st.button("▶ Run", type="primary"):
         with st.spinner("Scraping PSX tables..."):
             tables = scrape_all_tables(URL, wait_time=wait_time, headless=headless)
             combined_df = save_all_tables_single_sheet(tables)
@@ -176,11 +181,26 @@ with col2:
             st.error("No stock-sector tables detected after cleaning. Try increasing wait time or disabling headless.")
             st.stop()
 
-        st.success(f"Scraped rows: {len(combined_df)} | cols: {len(combined_df.columns)}")
-        st.dataframe(combined_df.head(30), use_container_width=True)
+        # FIXED: Store in session state
+        st.session_state.combined_df = combined_df
+        st.success(f"Scraped {len(combined_df)} rows")
 
-        with st.spinner("Calling OpenAI..."):
-            answer = summarize(combined_df, user_question)
+# FIXED: Display data and answer outside button block
+if st.session_state.combined_df is not None:
+    col_left, col_right = st.columns([1, 1])
+    
+    with col_left:
+        st.subheader("Live Market Data")
+        st.info(f"Scraped **{len(st.session_state.combined_df)}** rows")
+        st.dataframe(st.session_state.combined_df, use_container_width=True, height=400)
 
-        st.subheader("Bot Answer")
-        st.write(answer)
+    with col_right:
+        st.subheader("AI Answer")
+        
+        if st.button("🤖 Get AI Analysis"):
+            with st.spinner("Analyzing with AI..."):
+                try:
+                    answer = summarize(st.session_state.combined_df, user_question)
+                    st.markdown(answer)
+                except Exception as e:
+                    st.error(f"Error calling OpenAI: {str(e)}")
